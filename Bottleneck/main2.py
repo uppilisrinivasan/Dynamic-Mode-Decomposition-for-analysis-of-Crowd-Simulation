@@ -1,0 +1,133 @@
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import scipy
+
+from datafold import (
+    EDMD,
+    DMDStandard,
+    GaussianKernel,
+    TSCPolynomialFeatures,
+    TSCRadialBasis,
+    TSCDataFrame,
+    TSCTakensEmbedding
+)
+from datafold.utils._systems import Hopf
+from datafold.utils.general import generate_2d_regular_mesh
+
+import errors
+import models
+import utils
+
+df = pd.read_csv("result_df2.csv", index_col=[0, 1, 2], header=[0])
+#df = pd.read_csv("result_df.csv", index_col=[0, 1, 2], header=[0])
+df.index = df.index.droplevel(1) # drop run_id column
+#df_reshaped = df.pivot(columns='faceId')  # introduce columns for faceId values
+
+data = df.xs(0, level='id')
+#data = df_reshaped[df_reshaped.index.names == 'id']
+#data = data.drop(['id','run_id'], axis = 'columns')
+#data.to_csv('out.csv', sep='\t')
+new_column_names = []
+for i in range(0,len(data.columns)):
+    if i == 0:
+        new_column_names.append(data.columns[0])
+    else:
+        new_column_names.append('measurement_area' + str(i))
+
+data.columns = new_column_names
+#data = data.fillna(0)
+data_init = data.iloc[:, :-1]
+data_init.dropna(axis=0, inplace=True)
+targets_temp = data.iloc[:, -1:]
+
+sums_data= data_init.groupby(level='timeStep').sum()
+sums_data.drop(columns=['faceId'], inplace=True)
+data_final=sums_data #.iloc[:, :-1]
+targets_init = targets_temp.groupby(level='timeStep').sum()
+#targets_init = sums_data.iloc[:, -1:]
+temp_array = targets_init.to_numpy()
+temp_array2 = utils.compute_ped_leaving(targets_init)
+temp_array= temp_array.reshape(len(temp_array),)
+
+temp_array2= temp_array2.reshape(len(temp_array2),)
+
+# adding a column to of number of pedestrians leaving the room
+data_final['ped_leaving'] = temp_array2   
+x_tsc = TSCDataFrame.from_frame_list([data_final]).astype(np.float64)  # convert to TSC
+real_time1 = utils.compute_time_for_all_to_leave(x_tsc)
+
+time_delay_embed = TSCTakensEmbedding(delays=10, lag=0, frequency=1, kappa=0).fit(x_tsc)
+embed_values = time_delay_embed.transform(x_tsc)
+embed_values_new = time_delay_embed.inverse_transform(embed_values)
+
+dmd = models.dmd(x_tsc)
+dmd_modes = dmd.dmd_modes
+dmd_eigenvalues = dmd.eigenvalues_
+dmd_dt = dmd.dt_
+
+dmd_values = dmd.predict(x_tsc.initial_states(), time_values=x_tsc.time_values())
+x_predicted_dmd = dmd_values
+
+
+dmd_time1 = utils.compute_time_for_all_to_leave(x_predicted_dmd)
+
+dmd_mae, dmd_mse, dmd_rmse, dmd_mape, dmd_r_squared = errors.compiled_errors(x_tsc, x_predicted_dmd)
+dmd_mae2, dmd_mse2, dmd_rmse2, dmd_mape2, dmd_r_squared2 = errors.compiled_errors(x_tsc.iloc[:, :-1], x_predicted_dmd.iloc[:, :-1])
+
+dmd_time1_mae, dmd_time1_mse, dmd_time1_rmse, dmd_time1_mape, dmd_time1_r_squared = errors.compiled_errors(real_time1,dmd_time1)
+
+
+edmd_rbf = models.edmd_rbf(x_tsc, epsilon = 0.17)
+edmd_rbf_values = edmd_rbf.predict(
+    x_tsc.initial_states(), time_values=x_tsc.time_values()
+)
+
+x_predicted_edmd_rbf = edmd_rbf_values
+
+edmd_rbf_time1 = utils.compute_time_for_all_to_leave(x_predicted_edmd_rbf)
+
+edmd_rbf_mae, edmd_rbf_mse, edmd_rbf_rmse, edmd_rbf_mape, edmd_rbf_r_squared = errors.compiled_errors(x_tsc, x_predicted_edmd_rbf)
+edmd_rbf_mae2, edmd_rbf_mse2, edmd_rbf_rmse2, edmd_rbf_mape2, edmd_rbf_r_squared2 = errors.compiled_errors(x_tsc.iloc[:, :-1], x_predicted_edmd_rbf.iloc[:, :-1])
+#x_tsc_new = TSCDataFrame.from_frame_list([embedded_data]).astype(np.float64)  # convert to TSC
+edmd_rbf_time1_mae, edmd_rbf_time1_mse, edmd_rbf_time1_rmse, edmd_rbf_time1_mape, edmd_rbf_time1_r_squared = errors.compiled_errors(real_time1, edmd_rbf_time1)
+
+
+dmd = models.dmd(embed_values)
+dmd_modes = dmd.dmd_modes
+dmd_eigenvalues = dmd.eigenvalues_
+dmd_dt = dmd.dt_
+
+dmd_values_new = dmd.predict(embed_values.initial_states(), time_values=embed_values.time_values())
+x_predicted_dmd_new = dmd_values_new
+
+x_alternate = time_delay_embed.inverse_transform(dmd_values_new)
+
+dmd_time2 = utils.compute_time_for_all_to_leave(x_alternate)
+
+#dmd_mae_new, dmd_mse_new, dmd_rmse_new, dmd_mape_new, dmd_r_squared_new = errors.compiled_errors(embed_values, x_predicted_dmd_new)
+x_time_delay_init = x_tsc.iloc[10:]
+dmd_mae_embed, dmd_mse_embed, dmd_rmse_embed, dmd_mape_embed, dmd_r_squared_embed = errors.compiled_errors(x_time_delay_init, x_alternate)
+dmd_mae_embed2, dmd_mse_embed2, dmd_rmse_embed2, dmd_mape_embed2, dmd_r_squared_embed2 = errors.compiled_errors(x_time_delay_init.iloc[:, :-1], x_alternate.iloc[:, :-1])
+
+dmd_time2_mae_embed, dmd_time2_mse_embed, dmd_time2_rmse_embed, dmd_time2_mape_embed, dmd_time2_r_squared_embed = errors.compiled_errors(real_time1, dmd_time2)
+
+
+edmd_rbf_new = models.edmd_rbf(embed_values, epsilon = 0.17)
+edmd_rbf_values_new = edmd_rbf_new.predict(
+    embed_values.initial_states(), time_values=embed_values.time_values()
+)
+
+x_predicted_edmd_rbf_new = edmd_rbf_values_new
+
+x_edmd_rbf_alternate = time_delay_embed.inverse_transform(edmd_rbf_values_new)
+edmd_rbf_time2 = utils.compute_time_for_all_to_leave(x_edmd_rbf_alternate)
+
+edmd_rbf_mae_new, edmd_rbf_mse_new, edmd_rbf_rmse_new, edmd_rbf_mape_new, edmd_rbf_r_squared_new = errors.compiled_errors(x_time_delay_init, x_edmd_rbf_alternate)
+edmd_rbf_mae_new2, edmd_rbf_mse_new2, edmd_rbf_rmse_new2, edmd_rbf_mape_new2, edmd_rbf_r_squared_new2 = errors.compiled_errors(x_time_delay_init.iloc[:, :-1], x_edmd_rbf_alternate.iloc[:, :-1])
+edmd_rbf_time2_mae_new, edmd_rbf_time2_mse_new, edmd_rbf_time2_rmse_new, edmd_rbf_time2_mape_new, edmd_rbf_time2_r_squared_new = errors.compiled_errors(real_time1,edmd_rbf_time2)
+
+
+
+
+print('hello')

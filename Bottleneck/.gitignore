@@ -1,0 +1,12 @@
+vadere-console.jar
+result_df.csv
+lookup_df.csv
+mesh.txt
+log.out
+activate
+output/
+.venv/
+.my_env_thesis/
+.my_env2_thesis/
+suqc
+
